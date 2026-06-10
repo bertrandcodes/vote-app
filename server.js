@@ -1,10 +1,26 @@
 const express = require('express');
 const QRCode = require('qrcode');
 const crypto = require('crypto');
+const os = require('os');
+
+function getLocalIP() {
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const iface of ifaces) {
+      if (iface.family === 'IPv4' && !iface.internal) return iface.address;
+    }
+  }
+  return 'localhost';
+}
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+function parseCookies(req) {
+  const raw = req.headers.cookie || '';
+  return Object.fromEntries(raw.split(';').map(c => c.trim().split('=').map(decodeURIComponent)));
+}
 
 const POLL_DEFS = [
   { title: 'Best Table Topic', key: 'p0', max: 10 },
@@ -120,8 +136,10 @@ app.post('/setup', (req, res) => {
 app.get('/qr', async (req, res) => {
   if (!session) return res.redirect('/');
 
-  const host = req.headers.host || `localhost:${PORT}`;
-  const voteUrl = `http://${host}/vote/${session.id}`;
+  const requestHost = req.headers.host || `localhost:${PORT}`;
+  const host = requestHost.startsWith('localhost') ? `${getLocalIP()}:${PORT}` : requestHost;
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const voteUrl = `${protocol}://${host}/vote/${session.id}`;
   const qrDataUrl = await QRCode.toDataURL(voteUrl, { width: 280, margin: 2 });
 
   const pollLists = session.polls.map(p => `
@@ -177,8 +195,9 @@ app.get('/vote/:id', (req, res) => {
     return res.status(404).send(errorPage('This voting session is no longer active.'));
   }
 
-  const ip = req.ip;
-  const alreadyVoted = session.voters.has(ip);
+  const cookies = parseCookies(req);
+  const voterId = cookies[`voter_${session.id}`];
+  const alreadyVoted = !!voterId && session.voters.has(voterId);
 
   const pollSections = session.polls.map((poll, i) => `
     <div class="poll-section">
@@ -234,8 +253,9 @@ app.post('/vote/:id', (req, res) => {
     return res.status(404).send(errorPage('This voting session is no longer active.'));
   }
 
-  const ip = req.ip;
-  if (session.voters.has(ip)) {
+  const cookies = parseCookies(req);
+  const existingVoterId = cookies[`voter_${session.id}`];
+  if (existingVoterId && session.voters.has(existingVoterId)) {
     return res.redirect(`/vote/${session.id}`);
   }
 
@@ -247,10 +267,12 @@ app.post('/vote/:id', (req, res) => {
     }
   }
 
+  const newVoterId = crypto.randomBytes(16).toString('hex');
   for (let i = 0; i < session.polls.length; i++) {
     session.polls[i].votes[choices[i]]++;
   }
-  session.voters.add(ip);
+  session.voters.add(newVoterId);
+  res.setHeader('Set-Cookie', `voter_${session.id}=${newVoterId}; HttpOnly; SameSite=Lax; Max-Age=86400`);
 
   const choiceItems = session.polls.map((poll, i) => `
     <div class="choice-item">
