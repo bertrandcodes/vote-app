@@ -199,7 +199,9 @@ app.get('/vote/:id', (req, res) => {
   const voterId = cookies[`voter_${session.id}`];
   const alreadyVoted = !!voterId && session.voters.has(voterId);
 
-  const pollSections = session.polls.map((poll, i) => `
+  const pollSections = session.polls.map((poll, i) => {
+    if (poll.names.length === 0) return '';
+    return `
     <div class="poll-section">
       <h2 class="poll-heading">${escapeHtml(poll.title)}</h2>
       ${poll.names.map(n => `
@@ -207,7 +209,8 @@ app.get('/vote/:id', (req, res) => {
           <input type="radio" name="vote_${i}" value="${escapeHtml(n)}" required>
           <span>${escapeHtml(n)}</span>
         </label>`).join('')}
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -262,6 +265,7 @@ app.post('/vote/:id', (req, res) => {
   const choices = session.polls.map((_, i) => req.body[`vote_${i}`]);
 
   for (let i = 0; i < session.polls.length; i++) {
+    if (session.polls[i].names.length === 0) continue;
     if (!Object.prototype.hasOwnProperty.call(session.polls[i].votes, choices[i])) {
       return res.status(400).send(errorPage('Invalid vote choice.'));
     }
@@ -269,16 +273,20 @@ app.post('/vote/:id', (req, res) => {
 
   const newVoterId = crypto.randomBytes(16).toString('hex');
   for (let i = 0; i < session.polls.length; i++) {
+    if (session.polls[i].names.length === 0) continue;
     session.polls[i].votes[choices[i]]++;
   }
   session.voters.add(newVoterId);
   res.setHeader('Set-Cookie', `voter_${session.id}=${newVoterId}; HttpOnly; SameSite=Lax; Max-Age=86400`);
 
-  const choiceItems = session.polls.map((poll, i) => `
+  const choiceItems = session.polls.map((poll, i) => {
+    if (poll.names.length === 0) return '';
+    return `
     <div class="choice-item">
       <div class="category">${escapeHtml(poll.title)}</div>
       <div class="name-pill">${escapeHtml(choices[i])}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 
   res.send(`<!DOCTYPE html>
 <html lang="en">
